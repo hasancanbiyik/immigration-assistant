@@ -1,0 +1,28 @@
+# Immigration Assistance ChatBot — Dependencies
+# ===============================================
+
+# Core
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+python-multipart>=0.0.9
+pydantic>=2.0
+
+# PDF Parsing
+PyMuPDF>=1.24.0
+python-docx>=1.1.0
+
+# Embeddings & Vector Store
+sentence-transformers>=3.0.0
+chromadb>=0.5.0
+
+# Translation (OPUS-MT)
+transformers>=4.44.0
+torch>=2.0.0
+sentencepiece>=0.2.0
+
+# LLM (Gemini Free Tier)
+google-generativeai>=0.8.0
+
+# Testing
+pytest>=8.0.0
+httpx>=0.27.0

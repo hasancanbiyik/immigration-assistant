@@ -1,0 +1,48 @@
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Virtual environments ─────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── ChromaDB / client data (NEVER commit) ────────────────────────────────────
+data/chromadb/
+data/
+
+# ── ML model cache ────────────────────────────────────────────────────────────
+model_cache/
+.cache/
+huggingface/
+
+# ── Test artefacts ────────────────────────────────────────────────────────────
+.pytest_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/dist/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── IDE ───────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
