@@ -105,3 +105,24 @@ jobs:
           # Layer cache: reuse unchanged layers between runs
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── 4. Deploy to Fly.io ───────────────────────────────────────────────────────
+  deploy:
+    name: Deploy to Fly.io
+    runs-on: ubuntu-latest
+    needs: [docker-build]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up flyctl
+        uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        # --remote-only tells flyctl to build on Fly's builders (no local Docker needed).
+        # Requires FLY_API_TOKEN secret: https://fly.io/user/personal_access_tokens
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

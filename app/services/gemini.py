@@ -256,6 +256,161 @@ class GeminiService:
             logger.error(f"Gemini translation error: {e}")
             return None  # Caller falls back to OPUS-MT
 
+    async def extract_text_from_document(
+        self,
+        file_bytes: bytes,
+        filename: str,
+    ) -> Optional[str]:
+        """
+        Use Gemini's vision to OCR a scanned / image-based PDF.
+
+        Called automatically by the document upload endpoint when extracted
+        text is suspiciously sparse (< 150 chars/page on average), which
+        reliably indicates a scanned document rather than a text-based one.
+
+        Returns the full extracted text, or None if Gemini is unavailable or fails.
+        """
+        if not self.is_available:
+            return None
+
+        # Only PDFs need OCR — TXT/DOCX already yield usable text
+        if not filename.lower().endswith(".pdf"):
+            return None
+
+        import base64
+
+        ocr_prompt = (
+            "Extract ALL text from this document exactly as it appears on the page. "
+            "Preserve paragraph breaks, dates, numbers, names, addresses, "
+            "case numbers, receipt numbers, and all legal terminology precisely. "
+            "Do not summarize, interpret, add commentary, or skip any text. "
+            "Return only the raw extracted text — nothing else."
+        )
+
+        try:
+            genai = _get_genai()
+            ocr_model = genai.GenerativeModel(
+                model_name="gemini-2.5-flash",
+                generation_config={
+                    "temperature": 0.0,       # deterministic OCR
+                    "max_output_tokens": 8192,
+                },
+            )
+            content = [
+                {
+                    "inline_data": {
+                        "mime_type": "application/pdf",
+                        "data": base64.b64encode(file_bytes).decode("utf-8"),
+                    }
+                },
+                ocr_prompt,
+            ]
+            response = ocr_model.generate_content(content)
+            extracted = response.text.strip()
+            return extracted if extracted else None
+
+        except Exception as e:
+            logger.error(f"Gemini OCR error for '{filename}': {type(e).__name__}: {e}")
+            return None
+
+    async def extract_rfe_issues(
+        self,
+        file_bytes: bytes,
+        filename: str,
+        text_fallback: str = "",
+    ) -> list[str]:
+        """
+        Extract specific RFE issues from a document using Gemini's vision.
+
+        For PDFs (including scanned/image-only ones), the raw bytes are sent
+        directly as inline multimodal data — Gemini can read pages it can "see",
+        not just pages with extractable text.
+
+        For TXT / DOCX (no binary vision needed), the pre-extracted text is
+        sent as plain text in the prompt.
+
+        Returns a list of issue strings, or [] if Gemini is unavailable / fails.
+        """
+        if not self.is_available:
+            return []
+
+        import base64
+        import json
+        import re as _re
+
+        # ── Determine how to send the document ───────────────────────
+        fname_lower = filename.lower()
+        if fname_lower.endswith(".pdf"):
+            mime_type = "application/pdf"
+        elif fname_lower.endswith(".png"):
+            mime_type = "image/png"
+        elif fname_lower.endswith((".jpg", ".jpeg")):
+            mime_type = "image/jpeg"
+        else:
+            mime_type = None  # TXT / DOCX — use extracted text instead
+
+        extraction_prompt = (
+            "You are analyzing a USCIS Request for Evidence (RFE) notice issued to an immigration attorney.\n\n"
+            "Your task: extract ALL specific issues and evidence requests raised in this RFE.\n\n"
+            "Return ONLY a valid JSON array of strings. Each string should be one concise, "
+            "specific, and actionable issue or evidence item (1–2 sentences max).\n\n"
+            "Good example output:\n"
+            '["Provide evidence that the proffered position qualifies as a specialty occupation", '
+            '"Submit a NACES-approved credential evaluation confirming the beneficiary\'s degree", '
+            '"Include a detailed employer support letter on company letterhead listing specific job duties", '
+            '"Provide the LCA certified by the Department of Labor"]\n\n'
+            "Rules:\n"
+            "- Be specific and actionable — the attorney must know exactly what to gather\n"
+            "- Only include concrete evidence/documentation requests, not general commentary\n"
+            "- If no specific RFE issues can be identified, return an empty array: []\n\n"
+            "JSON array:"
+        )
+
+        try:
+            # Build a lightweight extraction model (no immigration QA system prompt)
+            genai = _get_genai()
+            extraction_model = genai.GenerativeModel(
+                model_name="gemini-2.5-flash",
+                generation_config={
+                    "temperature": 0.1,   # low temp for structured extraction
+                    "max_output_tokens": 1000,
+                },
+            )
+
+            if mime_type:
+                # Multimodal: send raw bytes — works for scanned/image PDFs
+                content = [
+                    {
+                        "inline_data": {
+                            "mime_type": mime_type,
+                            "data": base64.b64encode(file_bytes).decode("utf-8"),
+                        }
+                    },
+                    extraction_prompt,
+                ]
+            else:
+                # Text-only fallback for TXT / DOCX
+                text_snippet = text_fallback[:8000]
+                content = f"{extraction_prompt}\n\nDOCUMENT TEXT:\n{text_snippet}"
+
+            response = extraction_model.generate_content(content)
+            raw = response.text.strip()
+
+            # Extract the JSON array from the response
+            # Gemini sometimes wraps it in markdown fences or adds prose
+            json_match = _re.search(r"\[.*?\]", raw, _re.DOTALL)
+            if json_match:
+                parsed = json.loads(json_match.group(0))
+                if isinstance(parsed, list):
+                    return [str(item).strip() for item in parsed if str(item).strip()]
+
+            logger.warning(f"Gemini RFE extraction: unexpected response format — {raw[:200]}")
+            return []
+
+        except Exception as e:
+            logger.error(f"Gemini RFE extraction error: {type(e).__name__}: {e}")
+            return []
+
     def _fallback_answer(
         self, question: str, retrieved_chunks: list[dict]
     ) -> dict:

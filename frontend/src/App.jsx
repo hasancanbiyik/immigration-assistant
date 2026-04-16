@@ -1,11 +1,14 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 
-const API_BASE = "http://localhost:8000/api";
+// In production (Fly.io), frontend and backend share the same origin,
+// so "/api" works as a relative path. In local dev, Vite proxies /api → localhost:8000.
+const API_BASE = "/api";
 
 const TABS = [
   { id: "qa", label: "Document Q&A", icon: "M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" },
   { id: "translate", label: "Translation", icon: "M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" },
   { id: "timeline", label: "Case Timeline", icon: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" },
+  { id: "rfe", label: "RFE Tracker", icon: "M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" },
 ];
 
 const LANGUAGES = { tr: "Turkish", es: "Spanish", zh: "Chinese", ar: "Arabic", en: "English" };
@@ -135,6 +138,7 @@ function DocumentQA() {
   const [question, setQuestion] = useState("");
   const [uploading, setUploading] = useState(false);
   const [asking, setAsking] = useState(false);
+  const [deletingClient, setDeletingClient] = useState(false);
   const chatEndRef = useRef(null);
 
   // Fetch all stored docs for a client from the server
@@ -211,6 +215,31 @@ function DocumentQA() {
     setShowNewClient(false);
     selectClient(id);
   }, [clients, newClientName, selectClient]);
+
+  // Delete the currently selected client: wipe server docs + localStorage data
+  const deleteClient = useCallback(async () => {
+    if (!selectedClient) return;
+    if (!window.confirm(`Delete client "${selectedClient.name}" and all their documents? This cannot be undone.`)) return;
+    setDeletingClient(true);
+    try {
+      // Remove all server-side document chunks for this client
+      await fetch(`${API_BASE}/documents/client/${encodeURIComponent(selectedClient.name)}`, { method: "DELETE" });
+    } catch (e) {
+      console.error("Failed to delete server documents:", e);
+    }
+    // Clean up all localStorage keys for this client
+    localStorage.removeItem(`imm_msgs_${selectedClient.id}`);
+    localStorage.removeItem(`imm_notes_${selectedClient.id}`);
+    const updated = clients.filter(c => c.id !== selectedClient.id);
+    localStorage.setItem("imm_clients", JSON.stringify(updated));
+    localStorage.removeItem("imm_selected_client");
+    setClients(updated);
+    setSelectedClientId(null);
+    setMessages([]);
+    setNotes("");
+    setServerDocs([]);
+    setDeletingClient(false);
+  }, [selectedClient, clients]);
 
   const uploadFile = useCallback(async (files) => {
     if (!clientName) {
@@ -306,6 +335,22 @@ function DocumentQA() {
               <button onClick={addClient} disabled={!newClientName.trim()} style={{ ...inputStyle, border: "none", background: newClientName.trim() ? "#0F6E56" : "rgba(0,0,0,0.08)", color: newClientName.trim() ? "#fff" : "rgba(0,0,0,0.3)", fontWeight: 500, cursor: "pointer" }}>Save</button>
               <button onClick={() => { setShowNewClient(false); setNewClientName(""); }} style={{ ...inputStyle, background: "transparent", cursor: "pointer", color: "rgba(0,0,0,0.45)" }}>✕</button>
             </div>
+          )}
+
+          {/* Delete client — only shown when a client is selected */}
+          {selectedClient && !showNewClient && (
+            <button
+              onClick={deleteClient}
+              disabled={deletingClient}
+              title={`Delete "${selectedClient.name}" and all their documents`}
+              style={{
+                padding: "4px 12px", border: "1px solid rgba(226,75,74,0.35)", borderRadius: 8,
+                background: "transparent", color: "#E24B4A", fontSize: 12, fontWeight: 500,
+                cursor: "pointer", marginLeft: "auto", opacity: deletingClient ? 0.5 : 1,
+              }}
+            >
+              {deletingClient ? "Deleting…" : "Delete client"}
+            </button>
           )}
 
           {uploading && <StatusBadge type="warning">Processing...</StatusBadge>}
@@ -1244,6 +1289,709 @@ function TimelinePanel() {
   );
 }
 
+// ─── RFE Tracker ─────────────────────────────────────────────────────────────
+
+const RFE_STATUSES = [
+  { value: "open",        label: "Open",       color: "#EF9F27", bg: "#FAEEDA", border: "#EF9F27" },
+  { value: "in_progress", label: "In Progress", color: "#378ADD", bg: "#E6F1FB", border: "#85B7EB" },
+  { value: "responded",   label: "Responded",  color: "#1D9E75", bg: "#E1F5EE", border: "#9FE1CB" },
+  { value: "approved",    label: "Approved ✓", color: "#27500A", bg: "#EAF3DE", border: "#97C459" },
+  { value: "denied",      label: "Denied",     color: "#791F1F", bg: "#FCEBEB", border: "#F09595" },
+];
+
+const CASE_TYPES = ["H-1B", "I-130", "I-140", "I-485", "I-765", "N-400", "Asylum", "OPT", "Other"];
+
+const SERVICE_CENTERS = [
+  "California Service Center (CSC)",
+  "Nebraska Service Center (NSC)",
+  "Texas Service Center (TSC)",
+  "Vermont Service Center (VSC)",
+  "Potomac Service Center (PSC)",
+  "National Benefits Center (NBC)",
+  "Other",
+];
+
+/** Returns { label, bg, border, text } for a days_remaining value. */
+function deadlineStyle(days) {
+  if (days === null || days === undefined) return { label: "No deadline", bg: "#F1EFE8", border: "#C8C6BE", text: "#888780" };
+  if (days < 0)  return { label: `Overdue ${-days}d`,     bg: "#FCEBEB", border: "#F09595", text: "#791F1F" };
+  if (days === 0) return { label: "Due TODAY",             bg: "#FCEBEB", border: "#E24B4A", text: "#791F1F" };
+  if (days <= 14) return { label: `${days}d left`,         bg: "#FCEBEB", border: "#F09595", text: "#791F1F" };
+  if (days <= 30) return { label: `${days}d left`,         bg: "#FAEEDA", border: "#EF9F27", text: "#633806" };
+  return             { label: `${days}d left`,             bg: "#EAF3DE", border: "#97C459", text: "#27500A" };
+}
+
+function DeadlinePill({ days }) {
+  const s = deadlineStyle(days);
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 700,
+      padding: "3px 10px", borderRadius: 100,
+      background: s.bg, border: `1px solid ${s.border}`, color: s.text,
+      whiteSpace: "nowrap",
+    }}>{s.label}</span>
+  );
+}
+
+function StatusPill({ status }) {
+  const s = RFE_STATUSES.find(x => x.value === status) || RFE_STATUSES[0];
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", fontSize: 11, fontWeight: 600,
+      padding: "2px 10px", borderRadius: 100,
+      background: s.bg, border: `1px solid ${s.border}`, color: s.color,
+    }}>{s.label}</span>
+  );
+}
+
+const EMPTY_FORM = {
+  client_name: "", case_type: "", receipt_number: "", service_center: "",
+  rfe_issue_date: "", response_deadline: "", notes: "",
+};
+
+function RFETracker() {
+  const [cases, setCases] = useState([]);
+  const [selectedCase, setSelectedCase] = useState(null); // full case object with issues
+  const [showNewForm, setShowNewForm] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [newIssueText, setNewIssueText] = useState("");
+  const [extracting, setExtracting] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [loadingCases, setLoadingCases] = useState(true);
+  const extractRef = useRef(null);
+  const extractModeRef = useRef("quick"); // tracks which button triggered the file input
+
+  const inputStyle = {
+    padding: "6px 10px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8,
+    fontSize: 13, outline: "none", fontFamily: "inherit", boxSizing: "border-box",
+  };
+
+  // ── Data fetching ───────────────────────────────────────────────────
+
+  const loadCases = useCallback(async () => {
+    setLoadingCases(true);
+    try {
+      const res = await fetch(`${API_BASE}/rfe/cases`);
+      if (res.ok) setCases(await res.json());
+    } catch (e) { console.error("Failed to load RFE cases", e); }
+    setLoadingCases(false);
+  }, []);
+
+  const loadCase = useCallback(async (caseId) => {
+    try {
+      const res = await fetch(`${API_BASE}/rfe/cases/${caseId}`);
+      if (res.ok) {
+        const c = await res.json();
+        setSelectedCase(c);
+        // Sync updated case in list
+        setCases(prev => prev.map(x => x.id === c.id ? { ...x, ...c } : x));
+      }
+    } catch (e) { console.error(e); }
+  }, []);
+
+  useEffect(() => { loadCases(); }, [loadCases]);
+
+  // ── Case creation ───────────────────────────────────────────────────
+
+  const createCase = async () => {
+    if (!form.client_name.trim()) return;
+    setSaving(true);
+    try {
+      const body = {
+        client_name: form.client_name.trim(),
+        case_type: form.case_type || null,
+        receipt_number: form.receipt_number || null,
+        service_center: form.service_center || null,
+        rfe_issue_date: form.rfe_issue_date || null,
+        response_deadline: form.response_deadline || null,
+        notes: form.notes,
+      };
+      const res = await fetch(`${API_BASE}/rfe/cases`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        const newCase = await res.json();
+        setCases(prev => {
+          const updated = [...prev, newCase];
+          // Re-sort by deadline urgency (nulls last)
+          return updated.sort((a, b) => {
+            if (!a.response_deadline && !b.response_deadline) return 0;
+            if (!a.response_deadline) return 1;
+            if (!b.response_deadline) return -1;
+            return a.response_deadline.localeCompare(b.response_deadline);
+          });
+        });
+        setForm(EMPTY_FORM);
+        setShowNewForm(false);
+        // Auto-select the new case
+        setSelectedCase({ ...newCase, issues: [] });
+      }
+    } catch (e) { console.error(e); }
+    setSaving(false);
+  };
+
+  // ── Status update ───────────────────────────────────────────────────
+
+  const updateStatus = async (caseId, status) => {
+    try {
+      const res = await fetch(`${API_BASE}/rfe/cases/${caseId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (res.ok) {
+        const updated = await res.json();
+        setCases(prev => prev.map(c => c.id === caseId ? { ...c, status } : c));
+        if (selectedCase?.id === caseId) setSelectedCase(prev => ({ ...prev, status, ...updated }));
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  // ── Notes update (debounced on blur) ────────────────────────────────
+
+  const saveNotes = async (caseId, notes) => {
+    try {
+      await fetch(`${API_BASE}/rfe/cases/${caseId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes }),
+      });
+      setCases(prev => prev.map(c => c.id === caseId ? { ...c, notes } : c));
+    } catch (e) { console.error(e); }
+  };
+
+  // ── Delete case ─────────────────────────────────────────────────────
+
+  const deleteCase = async (caseId) => {
+    if (!window.confirm("Delete this RFE case and all its checklist items? This cannot be undone.")) return;
+    try {
+      await fetch(`${API_BASE}/rfe/cases/${caseId}`, { method: "DELETE" });
+      setCases(prev => prev.filter(c => c.id !== caseId));
+      if (selectedCase?.id === caseId) setSelectedCase(null);
+    } catch (e) { console.error(e); }
+  };
+
+  // ── Issue management ────────────────────────────────────────────────
+
+  const addIssue = async () => {
+    const title = newIssueText.trim();
+    if (!title || !selectedCase) return;
+    try {
+      const res = await fetch(`${API_BASE}/rfe/cases/${selectedCase.id}/issues`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+      if (res.ok) {
+        const issue = await res.json();
+        setSelectedCase(prev => ({ ...prev, issues: [...prev.issues, issue] }));
+        setNewIssueText("");
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const toggleIssue = async (issueId, currentCompleted) => {
+    if (!selectedCase) return;
+    const completed = !currentCompleted;
+    try {
+      const res = await fetch(`${API_BASE}/rfe/cases/${selectedCase.id}/issues/${issueId}`, {
+        method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ completed }),
+      });
+      if (res.ok) {
+        setSelectedCase(prev => ({
+          ...prev,
+          issues: prev.issues.map(i => i.id === issueId ? { ...i, completed: completed ? 1 : 0 } : i),
+        }));
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const deleteIssue = async (issueId) => {
+    if (!selectedCase) return;
+    try {
+      await fetch(`${API_BASE}/rfe/cases/${selectedCase.id}/issues/${issueId}`, { method: "DELETE" });
+      setSelectedCase(prev => ({ ...prev, issues: prev.issues.filter(i => i.id !== issueId) }));
+    } catch (e) { console.error(e); }
+  };
+
+  // ── PDF auto-extract ────────────────────────────────────────────────
+
+  const handleExtractFile = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedCase) return;
+    setExtracting(extractModeRef.current); // "quick" | "ai" — drives button label
+    const formData = new FormData();
+    formData.append("file", file);
+    const mode = extractModeRef.current;
+    try {
+      const res = await fetch(
+        `${API_BASE}/rfe/cases/${selectedCase.id}/extract-issues?mode=${mode}`,
+        { method: "POST", body: formData }
+      );
+      if (res.ok) {
+        await loadCase(selectedCase.id);
+      }
+    } catch (err) { console.error(err); }
+    setExtracting(false);
+    if (extractRef.current) extractRef.current.value = "";
+  };
+
+  // ── Derived values ──────────────────────────────────────────────────
+
+  const issuesDone = selectedCase?.issues?.filter(i => i.completed).length ?? 0;
+  const issuesTotal = selectedCase?.issues?.length ?? 0;
+  const issuesPct = issuesTotal > 0 ? Math.round((issuesDone / issuesTotal) * 100) : 0;
+
+  // Urgency sort: overdue / critical at top, resolved at bottom
+  const urgentCases = cases.filter(c => !["approved", "denied"].includes(c.status));
+  const closedCases = cases.filter(c => ["approved", "denied"].includes(c.status));
+
+  // ── Render ──────────────────────────────────────────────────────────
+
+  return (
+    <div style={{ display: "flex", height: "100%", overflow: "hidden", fontFamily: "inherit" }}>
+
+      {/* ── LEFT: Cases List ──────────────────────────────────────── */}
+      <div style={{
+        width: 300, flexShrink: 0, borderRight: "1px solid rgba(0,0,0,0.08)",
+        display: "flex", flexDirection: "column", background: "#FAFAF7",
+      }}>
+        {/* List header */}
+        <div style={{
+          padding: "12px 14px", borderBottom: "1px solid rgba(0,0,0,0.08)",
+          display: "flex", justifyContent: "space-between", alignItems: "center", background: "#fff",
+        }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: "rgba(0,0,0,0.5)", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+            RFE Cases {cases.length > 0 && `(${cases.length})`}
+          </span>
+          <button
+            onClick={() => { setShowNewForm(true); setSelectedCase(null); }}
+            style={{
+              padding: "4px 12px", borderRadius: 8, border: "none", fontSize: 12, fontWeight: 600,
+              background: "#0F6E56", color: "#fff", cursor: "pointer",
+            }}>+ New</button>
+        </div>
+
+        {/* Cases scroll */}
+        <div style={{ flex: 1, overflow: "auto", padding: "8px 0" }}>
+          {loadingCases && (
+            <p style={{ fontSize: 12, color: "rgba(0,0,0,0.35)", textAlign: "center", padding: "2rem 0" }}>Loading…</p>
+          )}
+
+          {!loadingCases && cases.length === 0 && (
+            <div style={{ padding: "2rem 1rem", textAlign: "center" }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>📋</div>
+              <p style={{ fontSize: 12, color: "rgba(0,0,0,0.4)", lineHeight: 1.6, margin: 0 }}>
+                No RFE cases yet.<br />Click <strong>+ New</strong> to add the first one.
+              </p>
+            </div>
+          )}
+
+          {/* Active/pending cases */}
+          {urgentCases.length > 0 && urgentCases.map(c => {
+            const ds = deadlineStyle(c.days_remaining);
+            const isSelected = selectedCase?.id === c.id;
+            return (
+              <button
+                key={c.id}
+                onClick={() => { setShowNewForm(false); loadCase(c.id); }}
+                style={{
+                  display: "block", width: "100%", textAlign: "left",
+                  padding: "10px 14px", margin: 0, border: "none",
+                  borderLeft: isSelected ? "3px solid #0F6E56" : "3px solid transparent",
+                  background: isSelected ? "#E1F5EE" : "transparent",
+                  cursor: "pointer", transition: "background 0.1s",
+                }}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 6, marginBottom: 4 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "#2C2C2A", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>
+                    {c.client_name}
+                  </span>
+                  <DeadlinePill days={c.days_remaining} />
+                </div>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                  {c.case_type && (
+                    <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 7px", borderRadius: 100, background: "#E6F1FB", color: "#0C447C", border: "1px solid #85B7EB" }}>
+                      {c.case_type}
+                    </span>
+                  )}
+                  <StatusPill status={c.status} />
+                </div>
+                {c.receipt_number && (
+                  <div style={{ fontSize: 10, color: "rgba(0,0,0,0.35)", marginTop: 4, fontFamily: "'DM Mono', monospace" }}>{c.receipt_number}</div>
+                )}
+              </button>
+            );
+          })}
+
+          {/* Closed cases section */}
+          {closedCases.length > 0 && (
+            <>
+              <div style={{ padding: "8px 14px 4px", fontSize: 10, fontWeight: 600, color: "rgba(0,0,0,0.3)", textTransform: "uppercase", letterSpacing: "0.07em" }}>
+                Closed
+              </div>
+              {closedCases.map(c => {
+                const isSelected = selectedCase?.id === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => { setShowNewForm(false); loadCase(c.id); }}
+                    style={{
+                      display: "block", width: "100%", textAlign: "left",
+                      padding: "8px 14px", margin: 0, border: "none",
+                      borderLeft: isSelected ? "3px solid #0F6E56" : "3px solid transparent",
+                      background: isSelected ? "#F0F7F5" : "transparent",
+                      cursor: "pointer", opacity: 0.6,
+                    }}
+                  >
+                    <div style={{ fontSize: 12, fontWeight: 600, color: "#2C2C2A", marginBottom: 2 }}>{c.client_name}</div>
+                    <div style={{ display: "flex", gap: 4 }}>
+                      {c.case_type && <span style={{ fontSize: 10, color: "rgba(0,0,0,0.4)" }}>{c.case_type}</span>}
+                      <StatusPill status={c.status} />
+                    </div>
+                  </button>
+                );
+              })}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* ── RIGHT: Detail / New Form ──────────────────────────────── */}
+      <div style={{ flex: 1, overflow: "auto", display: "flex", flexDirection: "column" }}>
+
+        {/* ── NEW CASE FORM ── */}
+        {showNewForm && (
+          <div style={{ padding: "1.5rem", maxWidth: 680, margin: "0 auto", width: "100%" }}>
+            <h3 style={{ margin: "0 0 20px", fontSize: 15, fontWeight: 700, color: "#2C2C2A" }}>
+              New RFE Case
+            </h3>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 12 }}>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 4, fontWeight: 600 }}>Client Name *</label>
+                <input
+                  autoFocus type="text" placeholder="e.g. John Smith"
+                  value={form.client_name} onChange={e => setForm(p => ({ ...p, client_name: e.target.value }))}
+                  style={{ ...inputStyle, width: "100%" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 4, fontWeight: 600 }}>Case Type</label>
+                <select value={form.case_type} onChange={e => setForm(p => ({ ...p, case_type: e.target.value }))}
+                  style={{ ...inputStyle, width: "100%", background: "#fff" }}>
+                  <option value="">— select —</option>
+                  {CASE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 4, fontWeight: 600 }}>Receipt Number</label>
+                <input type="text" placeholder="e.g. EAC2390012345"
+                  value={form.receipt_number} onChange={e => setForm(p => ({ ...p, receipt_number: e.target.value }))}
+                  style={{ ...inputStyle, width: "100%" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 4, fontWeight: 600 }}>RFE Issue Date</label>
+                <input type="date" value={form.rfe_issue_date}
+                  onChange={e => setForm(p => ({ ...p, rfe_issue_date: e.target.value }))}
+                  style={{ ...inputStyle, width: "100%" }} />
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 4, fontWeight: 600 }}>
+                  Response Deadline
+                  <span style={{ marginLeft: 4, fontWeight: 400, fontSize: 10 }}>(auto: +87 days)</span>
+                </label>
+                <input type="date" value={form.response_deadline}
+                  onChange={e => setForm(p => ({ ...p, response_deadline: e.target.value }))}
+                  style={{ ...inputStyle, width: "100%" }} />
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 4, fontWeight: 600 }}>Service Center</label>
+                <select value={form.service_center} onChange={e => setForm(p => ({ ...p, service_center: e.target.value }))}
+                  style={{ ...inputStyle, width: "100%", background: "#fff" }}>
+                  <option value="">— select —</option>
+                  {SERVICE_CENTERS.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div style={{ gridColumn: "1 / -1" }}>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 4, fontWeight: 600 }}>Notes</label>
+                <textarea rows={3} placeholder="Case notes, attorney assignment, key context…"
+                  value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))}
+                  style={{ ...inputStyle, width: "100%", resize: "vertical" }} />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={createCase} disabled={saving || !form.client_name.trim()}
+                style={{
+                  padding: "9px 24px", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 600, cursor: "pointer",
+                  background: form.client_name.trim() ? "#0F6E56" : "rgba(0,0,0,0.08)",
+                  color: form.client_name.trim() ? "#fff" : "rgba(0,0,0,0.3)",
+                }}>
+                {saving ? "Saving…" : "Create Case"}
+              </button>
+              <button onClick={() => { setShowNewForm(false); setForm(EMPTY_FORM); }}
+                style={{ padding: "9px 18px", borderRadius: 8, border: "1px solid rgba(0,0,0,0.12)", background: "transparent", fontSize: 13, cursor: "pointer", color: "rgba(0,0,0,0.5)" }}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── CASE DETAIL ── */}
+        {selectedCase && !showNewForm && (
+          <div style={{ padding: "1.5rem", maxWidth: 760, margin: "0 auto", width: "100%" }}>
+
+            {/* Header row */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 12 }}>
+              <div>
+                <h2 style={{ margin: "0 0 4px", fontSize: 18, fontWeight: 700, color: "#2C2C2A" }}>
+                  {selectedCase.client_name}
+                </h2>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                  {selectedCase.case_type && (
+                    <span style={{ fontSize: 11, fontWeight: 600, padding: "2px 10px", borderRadius: 100, background: "#E6F1FB", color: "#0C447C", border: "1px solid #85B7EB" }}>
+                      {selectedCase.case_type}
+                    </span>
+                  )}
+                  {selectedCase.receipt_number && (
+                    <span style={{ fontSize: 11, fontFamily: "'DM Mono', monospace", padding: "2px 8px", borderRadius: 6, background: "#F1EFE8", color: "#2C2C2A", border: "1px solid rgba(0,0,0,0.1)" }}>
+                      {selectedCase.receipt_number}
+                    </span>
+                  )}
+                  {selectedCase.service_center && (
+                    <span style={{ fontSize: 11, color: "rgba(0,0,0,0.4)" }}>{selectedCase.service_center}</span>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => deleteCase(selectedCase.id)}
+                title="Delete this case"
+                style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid rgba(226,75,74,0.3)", background: "transparent", color: "#E24B4A", fontSize: 12, cursor: "pointer" }}
+              >Delete</button>
+            </div>
+
+            {/* Status + Deadline row */}
+            <div style={{
+              display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20,
+              padding: "14px 16px", background: "#fff", borderRadius: 12, border: "1px solid rgba(0,0,0,0.08)",
+            }}>
+              <div>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Status
+                </label>
+                <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                  {RFE_STATUSES.map(s => (
+                    <button key={s.value} onClick={() => updateStatus(selectedCase.id, s.value)}
+                      style={{
+                        padding: "4px 12px", borderRadius: 100, fontSize: 11, fontWeight: 600, cursor: "pointer",
+                        border: `1.5px solid ${s.border}`,
+                        background: selectedCase.status === s.value ? s.bg : "transparent",
+                        color: selectedCase.status === s.value ? s.color : "rgba(0,0,0,0.35)",
+                        transition: "all 0.1s",
+                      }}>{s.label}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Response Deadline
+                </label>
+                {selectedCase.response_deadline ? (
+                  <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#2C2C2A" }}>
+                      {new Date(selectedCase.response_deadline + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}
+                    </span>
+                    <DeadlinePill days={selectedCase.days_remaining} />
+                  </div>
+                ) : (
+                  <span style={{ fontSize: 12, color: "rgba(0,0,0,0.3)" }}>No deadline set</span>
+                )}
+                {selectedCase.rfe_issue_date && (
+                  <div style={{ fontSize: 11, color: "rgba(0,0,0,0.35)", marginTop: 4 }}>
+                    RFE issued: {new Date(selectedCase.rfe_issue_date + "T12:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* ── Upload RFE Notice — dedicated visible section ── */}
+            <div style={{
+              marginBottom: 16, padding: "12px 14px",
+              background: "#F0F7FF", border: "1px solid #BEDAF7", borderRadius: 10,
+            }}>
+              <p style={{ margin: "0 0 8px", fontSize: 11, fontWeight: 700, color: "#0C447C", letterSpacing: "0.05em", textTransform: "uppercase" }}>
+                Upload RFE Notice to Extract Issues
+              </p>
+              <p style={{ margin: "0 0 10px", fontSize: 12, color: "#3A6A9A", lineHeight: 1.5 }}>
+                Upload the RFE document to automatically populate the checklist below.
+              </p>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {/* Hidden file input shared by both buttons */}
+                <input
+                  ref={extractRef}
+                  type="file"
+                  accept=".pdf,.txt,.docx"
+                  hidden
+                  onChange={handleExtractFile}
+                  disabled={!!extracting}
+                />
+
+                {/* Quick Extract — regex, fast, no tokens */}
+                <button
+                  disabled={!!extracting}
+                  onClick={() => { extractModeRef.current = "quick"; extractRef.current?.click(); }}
+                  title="Fast text-based extraction — best for clean, searchable PDFs. No API tokens used."
+                  style={{
+                    padding: "7px 16px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    border: "1px solid rgba(0,0,0,0.18)",
+                    background: extracting === "quick" ? "#E6F1FB" : "#fff",
+                    color: extracting === "quick" ? "#0C447C" : "#2C2C2A",
+                    display: "flex", alignItems: "center", gap: 5,
+                    opacity: !!extracting && extracting !== "quick" ? 0.4 : 1,
+                  }}
+                >
+                  {extracting === "quick" ? "Extracting…" : "⚡ Quick Extract"}
+                </button>
+
+                {/* AI Extract — Gemini vision, reads scanned/image PDFs */}
+                <button
+                  disabled={!!extracting}
+                  onClick={() => { extractModeRef.current = "ai"; extractRef.current?.click(); }}
+                  title="Gemini-powered — reads scanned or image-based PDFs that Quick Extract can't parse. Uses API tokens."
+                  style={{
+                    padding: "7px 16px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                    border: "1.5px solid #378ADD",
+                    background: extracting === "ai" ? "#E6F1FB" : "rgba(55,138,221,0.08)",
+                    color: extracting === "ai" ? "#0C447C" : "#1A6BB5",
+                    display: "flex", alignItems: "center", gap: 5,
+                    opacity: !!extracting && extracting !== "ai" ? 0.4 : 1,
+                  }}
+                >
+                  {extracting === "ai" ? "✨ AI Reading…" : "✨ AI Extract"}
+                </button>
+
+                <span style={{ fontSize: 11, color: "#3A6A9A", alignSelf: "center", fontStyle: "italic" }}>
+                  {extracting ? "Processing document…" : "PDF, TXT, or DOCX"}
+                </span>
+              </div>
+            </div>
+
+            {/* Issues Checklist */}
+            <div style={{ marginBottom: 20 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 700, color: "#2C2C2A" }}>
+                  Issues Checklist
+                  {issuesTotal > 0 && (
+                    <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 500, color: "rgba(0,0,0,0.4)" }}>
+                      {issuesDone}/{issuesTotal} resolved
+                    </span>
+                  )}
+                </span>
+              </div>
+
+              {/* Progress bar */}
+              {issuesTotal > 0 && (
+                <div style={{ height: 5, background: "rgba(0,0,0,0.06)", borderRadius: 3, marginBottom: 12, overflow: "hidden" }}>
+                  <div style={{
+                    height: "100%", borderRadius: 3, transition: "width 0.3s ease",
+                    background: issuesPct === 100 ? "#27500A" : issuesPct >= 60 ? "#1D9E75" : "#EF9F27",
+                    width: `${issuesPct}%`,
+                  }} />
+                </div>
+              )}
+
+              {/* Issue items */}
+              {issuesTotal === 0 && (
+                <p style={{ fontSize: 12, color: "rgba(0,0,0,0.35)", margin: "0 0 10px", lineHeight: 1.6 }}>
+                  No issues yet. Add items manually below, or upload the RFE notice PDF to auto-extract them.
+                </p>
+              )}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                {selectedCase.issues.map(issue => (
+                  <div key={issue.id} style={{
+                    display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 10px",
+                    borderRadius: 8, background: issue.completed ? "#F6FFF6" : "#fff",
+                    border: `1px solid ${issue.completed ? "rgba(39,80,10,0.15)" : "rgba(0,0,0,0.09)"}`,
+                    transition: "background 0.2s",
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={!!issue.completed}
+                      onChange={() => toggleIssue(issue.id, !!issue.completed)}
+                      style={{ marginTop: 2, width: 15, height: 15, accentColor: "#0F6E56", cursor: "pointer", flexShrink: 0 }}
+                    />
+                    <span style={{
+                      flex: 1, fontSize: 13, lineHeight: 1.5, color: "#2C2C2A",
+                      textDecoration: issue.completed ? "line-through" : "none",
+                      opacity: issue.completed ? 0.55 : 1,
+                    }}>
+                      {issue.title}
+                    </span>
+                    <button
+                      onClick={() => deleteIssue(issue.id)}
+                      style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, color: "rgba(0,0,0,0.25)", padding: "0 2px", flexShrink: 0, lineHeight: 1 }}
+                      title="Remove this issue"
+                    >✕</button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Add issue input */}
+              <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                <input
+                  type="text"
+                  placeholder="Add an issue or evidence item…"
+                  value={newIssueText}
+                  onChange={e => setNewIssueText(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && addIssue()}
+                  style={{ flex: 1, padding: "7px 12px", border: "1px dashed rgba(0,0,0,0.2)", borderRadius: 8, fontSize: 13, outline: "none", fontFamily: "inherit" }}
+                />
+                <button onClick={addIssue} disabled={!newIssueText.trim()}
+                  style={{
+                    padding: "7px 16px", borderRadius: 8, border: "none", fontSize: 13, fontWeight: 500, cursor: "pointer",
+                    background: newIssueText.trim() ? "#0F6E56" : "rgba(0,0,0,0.08)",
+                    color: newIssueText.trim() ? "#fff" : "rgba(0,0,0,0.3)",
+                  }}>Add</button>
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div>
+              <label style={{ fontSize: 11, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 6, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                Case Notes
+              </label>
+              <textarea
+                defaultValue={selectedCase.notes || ""}
+                key={selectedCase.id}
+                onBlur={e => saveNotes(selectedCase.id, e.target.value)}
+                rows={4}
+                placeholder="Attorney notes, strategy, follow-up reminders…"
+                style={{
+                  width: "100%", padding: "10px 12px", border: "1px solid rgba(0,0,0,0.1)", borderRadius: 10,
+                  fontSize: 13, resize: "vertical", lineHeight: 1.7, fontFamily: "inherit", outline: "none",
+                  background: "#FFFEF5", boxSizing: "border-box",
+                }}
+              />
+              <div style={{ fontSize: 10, color: "rgba(0,0,0,0.25)", textAlign: "right", marginTop: 3 }}>saved on blur</div>
+            </div>
+          </div>
+        )}
+
+        {/* ── EMPTY STATE ── */}
+        {!selectedCase && !showNewForm && (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 12, padding: "2rem" }}>
+            <div style={{ fontSize: 40 }}>⚖️</div>
+            <p style={{ fontSize: 15, fontWeight: 600, color: "#2C2C2A", margin: 0 }}>RFE Case Tracker</p>
+            <p style={{ fontSize: 13, color: "rgba(0,0,0,0.4)", maxWidth: 380, textAlign: "center", lineHeight: 1.7, margin: 0 }}>
+              Select a case from the list, or click <strong>+ New</strong> to track a new Request for Evidence.
+              Each case has its own isolated checklist, deadline countdown, and notes.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("qa");
   const [health, setHealth] = useState(null);
@@ -1306,6 +2054,7 @@ export default function App() {
         {activeTab === "qa" && <DocumentQA />}
         {activeTab === "translate" && <TranslationPanel />}
         {activeTab === "timeline" && <TimelinePanel />}
+        {activeTab === "rfe" && <RFETracker />}
       </main>
 
       <footer style={{

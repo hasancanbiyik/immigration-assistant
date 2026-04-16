@@ -24,9 +24,11 @@ from app.utils.pdf_parser import DocumentChunk
 
 logger = logging.getLogger(__name__)
 
-# BGE-M3 is 568M params, runs well on M4 MacBook with 24GB RAM
-# Falls back to MiniLM if BGE-M3 can't load (e.g., CI environment)
-DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3"
+# BGE-M3 is 568M params — great quality but needs ~2 GB RAM.
+# On memory-constrained hosts (e.g. Fly.io free/small VMs) set:
+#   EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+# MiniLM uses ~150 MB RAM and is more than good enough for demos.
+DEFAULT_EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 FALLBACK_EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 COLLECTION_NAME = "immigration_documents"

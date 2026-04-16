@@ -69,6 +69,36 @@ async def upload_document(
             detail=f"Failed to parse document: {str(e)}",
         )
 
+    # ── Gemini OCR fallback for scanned / image-based PDFs ────────────
+    # If extracted text is very sparse (< 150 chars/page on average), the
+    # document is almost certainly a scanned image rather than a text PDF.
+    # Gemini's vision can read the pages and return usable text for indexing.
+    ocr_used = False
+    _SPARSE_THRESHOLD = 150  # chars per page; well below any real text PDF
+    text_density = len(parsed.full_text.strip()) / max(parsed.total_pages, 1)
+
+    if text_density < _SPARSE_THRESHOLD:
+        gemini = request.app.state.gemini
+        if gemini.is_available:
+            logger.info(
+                f"Sparse text detected for '{file.filename}' "
+                f"({text_density:.0f} chars/page) — attempting Gemini OCR"
+            )
+            ocr_text = await gemini.extract_text_from_document(file_bytes, file.filename)
+            if ocr_text and len(ocr_text) > len(parsed.full_text):
+                # Re-parse using the richer OCR text so chunks are meaningful
+                parsed = document_parser._build_text_document(ocr_text, file.filename)
+                ocr_used = True
+                logger.info(
+                    f"Gemini OCR successful for '{file.filename}': "
+                    f"{len(ocr_text)} chars extracted"
+                )
+        else:
+            logger.warning(
+                f"'{file.filename}' appears to be a scanned PDF but Gemini is not "
+                "configured — indexing what little text could be extracted."
+            )
+
     # Determine case type and document type
     effective_case_type = case_type or parsed.metadata.detected_case_type
     doc_type = parsed.metadata.detected_document_type
@@ -97,6 +127,7 @@ async def upload_document(
         chunk_index=0,
     )
 
+    ocr_note = " (Gemini OCR used — scanned document detected)" if ocr_used else ""
     return DocumentUploadResponse(
         document_id=parsed.document_id,
         filename=file.filename,
@@ -105,7 +136,7 @@ async def upload_document(
         extracted_metadata=metadata,
         message=(
             f"Successfully processed {file.filename}: "
-            f"{parsed.total_pages} pages, {chunks_added} chunks indexed. "
+            f"{parsed.total_pages} pages, {chunks_added} chunks indexed.{ocr_note} "
             f"Detected case type: {effective_case_type or 'unknown'}. "
             f"Receipt numbers found: {parsed.metadata.receipt_numbers or 'none'}."
         ),
@@ -196,6 +227,25 @@ async def list_client_documents(request: Request, client_name: str):
     vector_store = request.app.state.vector_store
     filenames = vector_store.list_documents_by_client(client_name)
     return {"client_name": client_name, "documents": filenames}
+
+
+@router.delete("/client/{client_name}")
+async def delete_client(request: Request, client_name: str):
+    """
+    Delete ALL documents for a specific client and remove them from the vector store.
+    This does not delete anything from localStorage — the frontend handles that.
+    """
+    vector_store = request.app.state.vector_store
+    filenames = vector_store.list_documents_by_client(client_name)
+    total_chunks = 0
+    for fn in filenames:
+        total_chunks += vector_store.delete_document(fn, client_name=client_name)
+    return {
+        "message": f"Deleted client '{client_name}' — {len(filenames)} document(s), {total_chunks} chunk(s) removed.",
+        "client_name": client_name,
+        "documents_deleted": len(filenames),
+        "chunks_deleted": total_chunks,
+    }
 
 
 @router.delete("/client/{client_name}/{filename}")
