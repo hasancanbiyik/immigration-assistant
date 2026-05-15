@@ -95,6 +95,10 @@ def make_mock_gemini():
         "confidence": 88,
         "model_used": "gemini-2.5-flash",
     })
+    # OCR fallback path in documents.py awaits this; without AsyncMock it
+    # returns a non-awaitable MagicMock and uploads of sparse-text PDFs fail.
+    gem.extract_text_from_document = AsyncMock(return_value=None)
+    gem.extract_rfe_issues = AsyncMock(return_value=[])
     return gem
 
 

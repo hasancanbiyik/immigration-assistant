@@ -273,6 +273,59 @@ function DocumentQA() {
     setUploading(false);
   }, [clientName, fetchServerDocs]);
 
+  /**
+   * Demo-mode shortcut: creates a "Demo Client" (or reuses an existing one),
+   * selects it, then fetches /sample-i797-notice.txt from the static assets
+   * and uploads it through the real upload pipeline. Lets reviewers hit a
+   * working Q&A flow in one click without having a USCIS document on hand.
+   */
+  const loadSampleDemo = useCallback(async () => {
+    const sampleClientName = "Demo Client";
+    let demoClient = clients.find(c => c.name === sampleClientName);
+    let demoClientId = demoClient?.id;
+    if (!demoClient) {
+      demoClientId = `client_demo_${Date.now()}`;
+      const updated = [...clients, { id: demoClientId, name: sampleClientName, createdAt: new Date().toISOString() }];
+      setClients(updated);
+      localStorage.setItem("imm_clients", JSON.stringify(updated));
+    }
+    setSelectedClientId(demoClientId);
+    localStorage.setItem("imm_selected_client", demoClientId);
+    setMessages([{ role: "system", text: "Loading sample I-797 receipt notice…" }]);
+    setUploading(true);
+    try {
+      const resp = await fetch("/sample-i797-notice.txt");
+      if (!resp.ok) throw new Error(`Could not load sample file (HTTP ${resp.status}).`);
+      const blob = await resp.blob();
+      const file = new File([blob], "sample-i797-notice.txt", { type: "text/plain" });
+      const form = new FormData();
+      form.append("file", file);
+      form.append("client_name", sampleClientName);
+      const uploadRes = await fetch(`${API_BASE}/documents/upload`, { method: "POST", body: form });
+      const data = await uploadRes.json();
+      if (uploadRes.ok) {
+        fetchServerDocs(sampleClientName);
+        const caseType = data.extracted_metadata?.case_type;
+        setMessages([
+          {
+            role: "system",
+            text: `✓ Loaded sample I-797 notice — ${data.pages_processed} page${data.pages_processed !== 1 ? "s" : ""}, ${data.chunks_created} chunks indexed.`
+              + (caseType ? ` Detected case type: ${caseType}.` : ""),
+          },
+          {
+            role: "system",
+            text: 'Try asking: "What is the receipt number?" or "When was this notice issued?" or "What is the priority date?"',
+          },
+        ]);
+      } else {
+        setMessages([{ role: "system", text: `Sample load failed: ${data.detail || "Unknown error"}`, error: true }]);
+      }
+    } catch (e) {
+      setMessages([{ role: "system", text: `Sample load error: ${e.message}`, error: true }]);
+    }
+    setUploading(false);
+  }, [clients, fetchServerDocs]);
+
   const askQuestion = useCallback(async () => {
     if (!question.trim()) return;
     const q = question.trim();
@@ -315,12 +368,31 @@ function DocumentQA() {
           </select>
 
           {!showNewClient ? (
-            <button
-              onClick={() => setShowNewClient(true)}
-              style={{ ...inputStyle, cursor: "pointer", background: "transparent", border: "1px dashed rgba(0,0,0,0.22)", color: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: 4 }}
-            >
-              + New client
-            </button>
+            <>
+              <button
+                onClick={() => setShowNewClient(true)}
+                style={{ ...inputStyle, cursor: "pointer", background: "transparent", border: "1px dashed rgba(0,0,0,0.22)", color: "rgba(0,0,0,0.5)", display: "flex", alignItems: "center", gap: 4 }}
+              >
+                + New client
+              </button>
+              <button
+                onClick={loadSampleDemo}
+                disabled={uploading}
+                title="Creates a Demo Client and loads a synthetic I-797 receipt notice so you can try Q&A in one click."
+                style={{
+                  ...inputStyle,
+                  cursor: uploading ? "default" : "pointer",
+                  background: uploading ? "rgba(15,110,86,0.08)" : "#EAF3DE",
+                  border: "1px solid #97C459",
+                  color: "#27500A",
+                  fontWeight: 500,
+                  display: "flex", alignItems: "center", gap: 4,
+                  opacity: uploading ? 0.6 : 1,
+                }}
+              >
+                ✨ Try with sample document
+              </button>
+            </>
           ) : (
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               <input
@@ -1992,17 +2064,129 @@ function RFETracker() {
   );
 }
 
+/**
+ * Cold-start overlay. The HuggingFace free CPU tier sleeps after ~48h of
+ * inactivity, so the first visitor after a sleep has to wait for the
+ * container to boot AND for the embedding model to load (~15–60s).
+ *
+ * Without this overlay the app looks broken — buttons "work" but every
+ * API call fails until the embedder is up. The overlay polls /api/health
+ * and dismisses itself the moment `ready: true` comes back.
+ */
+function BootingOverlay({ health }) {
+  const [elapsed, setElapsed] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setElapsed(e => e + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const isOffline = health?.status === "offline";
+  const isInitializing = health && health.status === "healthy" && !health.ready;
+  const isInitial = !health;
+
+  let title = "Starting up the demo";
+  let subtitle = "Connecting to the backend…";
+  if (isInitial) {
+    subtitle = "Connecting to the backend…";
+  } else if (isOffline) {
+    title = "Waking up the server";
+    subtitle = "The free-tier container sleeps after inactivity. This usually takes 30–60 seconds on first visit.";
+  } else if (isInitializing) {
+    title = "Loading the embedding model";
+    subtitle = "Almost there — preparing the document retriever. This only happens on the first visit after a restart.";
+  }
+
+  return (
+    <div style={{
+      position: "fixed", inset: 0, zIndex: 9999,
+      background: "rgba(250,250,247,0.96)", backdropFilter: "blur(6px)",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
+      fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif", color: "#2C2C2A",
+      padding: "0 1.5rem", textAlign: "center",
+    }}>
+      <div style={{
+        width: 56, height: 56, borderRadius: 14,
+        background: "linear-gradient(135deg, #0F6E56, #1D9E75)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        marginBottom: 24,
+        animation: "boot-pulse 1.8s ease-in-out infinite",
+      }}>
+        <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 21v-4a2 2 0 012-2h4a2 2 0 012 2v4M13 21v-4a2 2 0 012-2h4a2 2 0 012 2v4M3 10V6a2 2 0 012-2h14a2 2 0 012 2v4" />
+        </svg>
+      </div>
+      <div style={{ fontSize: 20, fontWeight: 600, letterSpacing: "-0.02em", marginBottom: 8 }}>
+        {title}
+      </div>
+      <div style={{ fontSize: 14, color: "rgba(0,0,0,0.55)", maxWidth: 460, lineHeight: 1.55 }}>
+        {subtitle}
+      </div>
+      <div style={{ marginTop: 28, fontFamily: "'DM Mono', monospace", fontSize: 12, color: "rgba(0,0,0,0.35)" }}>
+        {elapsed}s elapsed
+      </div>
+      <div style={{ marginTop: 32, fontSize: 11, color: "rgba(0,0,0,0.4)", maxWidth: 440 }}>
+        This is a public demo of an immigration-law RAG assistant. The full version uses persistent storage and the larger BGE-M3 retriever — contact me for the production deployment.
+      </div>
+      <style>{`
+        @keyframes boot-pulse {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.08); opacity: 0.85; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState("qa");
   const [health, setHealth] = useState(null);
 
+  // Poll /api/health until the backend reports `ready: true`. We poll every
+  // 2.5s during cold-start; once ready, we drop to a 30s heartbeat just to
+  // keep the header badges (Gemini, API Connected) fresh.
   useEffect(() => {
-    fetch(`${API_BASE}/health`).then(r => r.json()).then(setHealth).catch(() => setHealth({ status: "offline" }));
+    let cancelled = false;
+    let interval = null;
+
+    const tick = () => {
+      fetch(`${API_BASE}/health`)
+        .then(r => r.json())
+        .then(data => {
+          if (cancelled) return;
+          setHealth(data);
+          // Once ready, slow down polling to 30s.
+          if (data.ready && interval) {
+            clearInterval(interval);
+            interval = setInterval(tick, 30000);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setHealth({ status: "offline" });
+        });
+    };
+
+    tick();                                  // immediate first call
+    interval = setInterval(tick, 2500);      // then every 2.5s during warm-up
+    return () => { cancelled = true; if (interval) clearInterval(interval); };
   }, []);
+
+  const showOverlay = !health?.ready;
 
   return (
     <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif", color: "#2C2C2A", background: "#FAFAF7" }}>
       <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600&family=DM+Mono:wght@400&display=swap" rel="stylesheet" />
+
+      {showOverlay && <BootingOverlay health={health} />}
+
+      {/* Public-demo banner — sets expectations, prompts the hire conversation. */}
+      <div style={{
+        padding: "6px 1.5rem", background: "#FFF8E6", borderBottom: "1px solid #F2D981",
+        fontSize: 12, color: "#5C4500", display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+        textAlign: "center",
+      }}>
+        <span style={{ fontWeight: 600 }}>Public demo.</span>
+        <span>Data resets between sessions. For the full deployment with persistent storage, BGE-M3 retrieval, and SLA — <a href="https://hasancanbiyik.com" target="_blank" rel="noopener noreferrer" style={{ color: "#5C4500", textDecoration: "underline" }}>get in touch</a>.</span>
+      </div>
 
       <header style={{
         padding: "0 1.5rem", height: 56, display: "flex", alignItems: "center", justifyContent: "space-between",

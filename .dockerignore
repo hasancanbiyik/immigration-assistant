@@ -2,6 +2,11 @@
 node_modules
 frontend/node_modules
 
+# Python virtual envs (NEVER ship these — they're huge and host-specific)
+.venv/
+venv/
+env/
+
 # Python cache
 **/__pycache__
 **/*.pyc
@@ -17,18 +22,28 @@ frontend/node_modules
 .DS_Store
 Thumbs.db
 
-# Data (mounted as a volume at runtime)
+# Data (ephemeral on free HF Space; mounted as a volume on Fly.io)
 data/
 
 # Test artefacts
+tests/
 .pytest_cache
 coverage.xml
 htmlcov/
+requirements-test.txt
+
+# Docs not needed inside the container
+TECHNICAL_ACHIEVEMENTS.md
+frontend/README.md
 
 # Local env files
 .env
 .env.local
 .env.*.local
+
+# Editor / IDE
+.vscode/
+.idea/
 
 # Logs
 *.log

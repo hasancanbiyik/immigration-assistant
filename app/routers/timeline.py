@@ -269,9 +269,6 @@ class ManualEventRequest(BaseModel):
     form_type: Optional[str] = None
 
 
-from pydantic import BaseModel as BaseModel  # noqa: already imported
-
-
 @router.post("/events/add", response_model=CaseTimeline)
 async def add_manual_event(body: ManualEventRequest):
     """

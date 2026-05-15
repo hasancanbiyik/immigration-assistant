@@ -33,6 +33,47 @@ def _get_genai():
     return _genai
 
 
+def _extract_json_array(raw: str) -> Optional[list]:
+    """
+    Pull the first balanced top-level JSON array out of a string.
+
+    Walks the text from the first '[' and matches brackets while
+    correctly skipping over '[' / ']' that appear inside JSON strings
+    (including escaped quotes). Returns the parsed list, or None if
+    no valid array is found.
+    """
+    start = raw.find("[")
+    if start < 0:
+        return None
+
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "[":
+            depth += 1
+        elif ch == "]":
+            depth -= 1
+            if depth == 0:
+                try:
+                    parsed = json.loads(raw[start : i + 1])
+                    return parsed if isinstance(parsed, list) else None
+                except json.JSONDecodeError:
+                    return None
+    return None
+
+
 # System prompt for immigration law Q&A
 _LANGUAGE_NAMES = {
     "tr": "Turkish", "es": "Spanish", "zh": "Chinese",
@@ -335,8 +376,6 @@ class GeminiService:
             return []
 
         import base64
-        import json
-        import re as _re
 
         # ── Determine how to send the document ───────────────────────
         fname_lower = filename.lower()
@@ -396,13 +435,13 @@ class GeminiService:
             response = extraction_model.generate_content(content)
             raw = response.text.strip()
 
-            # Extract the JSON array from the response
-            # Gemini sometimes wraps it in markdown fences or adds prose
-            json_match = _re.search(r"\[.*?\]", raw, _re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group(0))
-                if isinstance(parsed, list):
-                    return [str(item).strip() for item in parsed if str(item).strip()]
+            # Extract the JSON array from the response. Gemini sometimes wraps
+            # it in markdown fences or adds prose. We can't use a non-greedy
+            # regex because issue strings may contain "]" — instead we walk
+            # the string and balance brackets, ignoring brackets inside strings.
+            parsed = _extract_json_array(raw)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
 
             logger.warning(f"Gemini RFE extraction: unexpected response format — {raw[:200]}")
             return []

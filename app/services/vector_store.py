@@ -100,8 +100,12 @@ class VectorStoreService:
             texts, show_progress_bar=False, normalize_embeddings=True
         ).tolist()
 
+        # Scope ids by client so two clients uploading the same filename
+        # don't overwrite each other via upsert. Falls back to "_global" when
+        # no client is provided (e.g. anonymous demo uploads).
+        client_key = (client_name or "_global").strip().lower().replace(" ", "_")
         ids = [
-            f"{chunks[0].source_filename}_{chunk.chunk_index}"
+            f"{client_key}::{chunk.source_filename}::{chunk.chunk_index}"
             for chunk in chunks
         ]
 
