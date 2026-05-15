@@ -8,6 +8,7 @@ Translation priority:
   2. Helsinki-NLP OPUS-MT (local model, no API key needed) — fallback
 """
 
+import os
 import time
 import logging
 from io import BytesIO
@@ -329,7 +330,22 @@ def _build_docx(translated_text: str, certification: str, title: str) -> tuple:
 
 
 def _build_pdf(translated_text: str, certification: str, title: str) -> tuple:
-    """Build a PDF file from translated text using fpdf2."""
+    """
+    Build a PDF file from translated text using fpdf2.
+
+    Font strategy:
+      - If DejaVuSans.ttf is available (installed via `fonts-dejavu-core`
+        in the Dockerfile), use it. DejaVu covers Turkish, Spanish, Arabic,
+        Greek, Cyrillic — i.e. every language pair we support except Chinese.
+      - Otherwise fall back to fpdf2's built-in Helvetica (Latin-1 only) and
+        replace unsupported characters with '?'. This keeps local dev working
+        on machines that don't have DejaVu installed.
+
+    For Chinese (`zh`), neither core Helvetica nor DejaVuSans covers CJK
+    glyphs — those characters will still render as boxes/question marks.
+    Full CJK support would require shipping a Noto CJK font (~10–15 MB);
+    deferred until there's actual demand.
+    """
     try:
         from fpdf import FPDF
     except ImportError:
@@ -338,53 +354,73 @@ def _build_pdf(translated_text: str, certification: str, title: str) -> tuple:
             detail="PDF export requires the fpdf2 library. Run: pip install fpdf2",
         )
 
-    def safe(text: str) -> str:
-        """Encode text to latin-1 safely (replaces unsupported chars like Turkish ş, ğ, ı)."""
-        return text.encode("latin-1", errors="replace").decode("latin-1")
+    # ── Detect Unicode font ──────────────────────────────────────────
+    _DEJAVU_DIR = "/usr/share/fonts/truetype/dejavu"
+    _candidates = {
+        "regular":      os.path.join(_DEJAVU_DIR, "DejaVuSans.ttf"),
+        "bold":         os.path.join(_DEJAVU_DIR, "DejaVuSans-Bold.ttf"),
+        "italic":       os.path.join(_DEJAVU_DIR, "DejaVuSans-Oblique.ttf"),
+    }
+    has_unicode_font = all(os.path.exists(p) for p in _candidates.values())
 
     pdf = FPDF()
-    # IMPORTANT: set_margins must be called BEFORE add_page so epw is computed correctly
+    # set_margins must be called BEFORE add_page so epw is computed correctly
     pdf.set_margins(20, 20, 20)
     pdf.set_auto_page_break(auto=True, margin=20)
     pdf.add_page()
-    w = pdf.epw  # effective page width (page width minus left+right margins)
+    w = pdf.epw
 
-    # Title
-    pdf.set_font("Helvetica", "B", 16)
+    if has_unicode_font:
+        pdf.add_font("DejaVu", "",  _candidates["regular"])
+        pdf.add_font("DejaVu", "B", _candidates["bold"])
+        pdf.add_font("DejaVu", "I", _candidates["italic"])
+        body_font = "DejaVu"
+
+        def render(text: str) -> str:
+            return text  # fpdf2 with TTF handles Unicode natively
+    else:
+        body_font = "Helvetica"
+
+        def render(text: str) -> str:
+            """Strip chars Helvetica can't render. Only invoked in fallback path."""
+            return text.encode("latin-1", errors="replace").decode("latin-1")
+
+    # ── Title ────────────────────────────────────────────────────────
+    pdf.set_font(body_font, "B", 16)
     pdf.set_text_color(15, 110, 86)
-    pdf.multi_cell(w, 8, safe(f"Translation: {title}"))
+    pdf.multi_cell(w, 8, render(f"Translation: {title}"))
     pdf.ln(4)
 
-    # Warning notice
-    pdf.set_font("Helvetica", "I", 9)
+    # ── Warning notice ───────────────────────────────────────────────
+    pdf.set_font(body_font, "I", 9)
     pdf.set_text_color(150, 80, 0)
     notice = (
         "WARNING: AI-assisted translation draft. Must be reviewed and certified "
         "by a qualified human translator before USCIS submission."
     )
-    pdf.multi_cell(w, 5, safe(notice))
+    pdf.multi_cell(w, 5, render(notice))
     pdf.ln(8)
 
-    # Translation body
-    pdf.set_font("Helvetica", "B", 12)
+    # ── Translation body ─────────────────────────────────────────────
+    pdf.set_font(body_font, "B", 12)
     pdf.set_text_color(0, 0, 0)
-    pdf.multi_cell(w, 8, "Translation")
-    pdf.set_font("Helvetica", "", 11)
+    pdf.multi_cell(w, 8, render("Translation"))
+    pdf.set_font(body_font, "", 11)
 
     for para in translated_text.split("\n\n"):
         para = para.strip()
         if para:
-            pdf.multi_cell(w, 6, safe(para))
+            pdf.multi_cell(w, 6, render(para))
             pdf.ln(3)
 
-    # Certification
+    # ── Certification ────────────────────────────────────────────────
     if certification and certification.strip():
         pdf.add_page()
-        pdf.set_font("Helvetica", "B", 12)
-        pdf.multi_cell(w, 8, "USCIS Certification Statement")
-        pdf.set_font("Helvetica", "", 10)
+        pdf.set_font(body_font, "B", 12)
+        pdf.multi_cell(w, 8, render("USCIS Certification Statement"))
+        pdf.set_font(body_font, "", 10)
         for line in certification.split("\n"):
-            pdf.multi_cell(w, 5, safe(line))
+            pdf.multi_cell(w, 5, render(line))
 
     content = bytes(pdf.output())
     return content, "application/pdf", "pdf"

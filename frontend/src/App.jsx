@@ -787,8 +787,9 @@ function TranslationPanel() {
       {translatedText && !loading && (
         <div style={{ marginTop: 14, display: "flex", gap: 8, flexWrap: "wrap" }}>
           {[
-            { fmt: "txt", label: ".txt", action: downloadTxt },
+            { fmt: "txt",  label: ".txt",  action: downloadTxt },
             { fmt: "docx", label: ".docx", action: () => downloadAs("docx") },
+            { fmt: "pdf",  label: ".pdf",  action: () => downloadAs("pdf") },
           ].map(({ fmt, label, action }) => (
             <button key={fmt} onClick={action}
               style={{

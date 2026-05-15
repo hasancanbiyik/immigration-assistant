@@ -50,8 +50,13 @@ EVENT_PATTERNS = {
     ],
     TimelineEventType.RFE_ISSUED: [
         r"(?i)request\s+for\s+(?:additional\s+)?evidence",
-        r"(?i)rfe",
+        r"(?i)\brfe\b",
         r"(?i)we\s+need\s+(?:additional|more)\s+(?:evidence|information)",
+    ],
+    TimelineEventType.NOID: [
+        r"(?i)notice\s+of\s+intent\s+to\s+deny",
+        r"(?i)\bnoid\b",
+        r"(?i)intent\s+to\s+deny",
     ],
     TimelineEventType.BIOMETRICS: [
         r"(?i)biometric",

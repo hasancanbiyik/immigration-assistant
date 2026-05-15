@@ -135,6 +135,7 @@ class TimelineEventType(str, Enum):
     BIOMETRICS = "biometrics"
     RFE_ISSUED = "rfe_issued"
     RFE_RESPONSE = "rfe_response"
+    NOID = "noid"                # Notice of Intent to Deny (30-day window)
     INTERVIEW = "interview"
     APPROVAL = "approval"
     DENIAL = "denial"

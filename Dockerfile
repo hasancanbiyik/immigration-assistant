@@ -16,8 +16,13 @@ FROM python:3.11-slim
 WORKDIR /app
 
 # System deps
+# - build-essential: needed for some Python wheels that compile C extensions
+# - fonts-dejavu-core: provides DejaVuSans.ttf so the PDF exporter can render
+#   Turkish, Spanish, Arabic, etc. correctly (fpdf2's core Helvetica is Latin-1
+#   only). ~2 MB installed; cheaper than committing the TTF to the repo.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Python deps (copied before app code so this layer is cached unless deps change)

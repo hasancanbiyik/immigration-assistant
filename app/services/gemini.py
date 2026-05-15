@@ -248,6 +248,13 @@ class GeminiService:
 
         Returns a dict with 'translated_text', 'confidence', and 'model_used',
         or None if Gemini is unavailable (caller should fall back to OPUS-MT).
+
+        Uses a dedicated GenerativeModel instance with NO system prompt and a
+        much larger output token limit. The shared `self.model` is configured
+        for Q&A (system_instruction = IMMIGRATION_QA_SYSTEM_PROMPT, max_output_tokens=1500),
+        which both conflicts with translation intent and truncates non-trivial
+        legal documents mid-sentence. Mirrors the pattern used by
+        extract_text_from_document and extract_rfe_issues.
         """
         if not self.is_available:
             return None
@@ -262,7 +269,38 @@ class GeminiService:
         )
 
         try:
-            response = self.model.generate_content(prompt)
+            genai = _get_genai()
+            translation_model = genai.GenerativeModel(
+                model_name="gemini-2.5-flash",
+                # No system_instruction — the translation prompt already
+                # carries the "you are a certified legal translator" framing.
+                # Mixing in the QA system prompt makes Gemini hedge and cite.
+                generation_config={
+                    "temperature": 0.2,
+                    "top_p": 0.9,
+                    # 8192 is the Gemini 2.5 Flash output ceiling. The 1500-token
+                    # cap on the shared QA model was the primary cause of the
+                    # "translation cuts off mid-sentence" bug for longer inputs.
+                    "max_output_tokens": 8192,
+                },
+            )
+            response = translation_model.generate_content(prompt)
+
+            # Defensive: Gemini can return an empty response if blocked by a
+            # safety filter or if the candidate has no content. response.text
+            # raises ValueError in that case. Surface a clean failure so the
+            # caller can fall back to OPUS-MT instead of crashing.
+            if not response.candidates or not response.candidates[0].content.parts:
+                finish_reason = (
+                    response.candidates[0].finish_reason
+                    if response.candidates else "no_candidates"
+                )
+                logger.warning(
+                    f"Gemini translation returned empty response (finish_reason={finish_reason}). "
+                    f"Falling back to OPUS-MT."
+                )
+                return None
+
             raw = response.text.strip()
 
             # Parse confidence score from the last line
