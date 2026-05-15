@@ -1462,6 +1462,12 @@ function RFETracker() {
     } catch (e) { console.error(e); }
   }, []);
 
+  // Initial load. `loadCases` is wrapped in useCallback with [] deps so the
+  // identity is stable — this effect runs exactly once on mount. The lint
+  // rule fires because loadCases internally calls setLoadingCases() before
+  // its await; that's intentional (UI shows the loading state immediately)
+  // and not the cascading-render anti-pattern the rule is designed to catch.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadCases(); }, [loadCases]);
 
   // ── Case creation ───────────────────────────────────────────────────
@@ -1660,7 +1666,9 @@ function RFETracker() {
 
           {/* Active/pending cases */}
           {urgentCases.length > 0 && urgentCases.map(c => {
-            const ds = deadlineStyle(c.days_remaining);
+            // Note: <DeadlinePill /> below handles its own urgency styling.
+            // Earlier versions computed `deadlineStyle(c.days_remaining)` here;
+            // that's dead code now.
             const isSelected = selectedCase?.id === c.id;
             return (
               <button
