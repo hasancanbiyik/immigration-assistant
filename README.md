@@ -6,7 +6,7 @@ colorTo: indigo
 sdk: docker
 app_port: 8000
 pinned: false
-short_description: RAG-powered immigration law assistant — Q&A, translation, timeline, RFE tracker
+short_description: AI Immigration Assistant — Q&A, translation, RFE tracker
 ---
 
 # Immigration Assistant ChatBot
