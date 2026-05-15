@@ -687,6 +687,11 @@ function TranslationPanel() {
   const langOptions = Object.entries(LANGUAGES).filter(([k]) => k !== (mode === "text" ? targetLang : ""));
 
   return (
+    // Outer wrapper handles vertical scroll inside the fixed-height <main>.
+    // Without this, long document translations (and the download buttons that
+    // follow them) get clipped by main's overflow:hidden. Other panels
+    // (DocumentQA, Timeline, RFE) already use this flex/overflow pattern.
+    <div style={{ flex: 1, overflowY: "auto", width: "100%" }}>
     <div style={{ padding: "1.5rem", maxWidth: 900, margin: "0 auto" }}>
 
       {/* ── Alert banner ─────────────────────────────────────────── */}
@@ -837,6 +842,7 @@ function TranslationPanel() {
           }}>{certification}</pre>
         </details>
       )}
+    </div>
     </div>
   );
 }
