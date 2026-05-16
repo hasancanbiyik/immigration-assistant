@@ -684,34 +684,31 @@ function TranslationPanel() {
     setLoading(false);
   };
 
-  // Filter source dropdown to exclude the current target. (Previous version
-  // only filtered in text mode — document mode let source==target, which the
-  // backend rejects with HTTP 400 "Source and target must be different".)
-  const langOptions = Object.entries(LANGUAGES).filter(([k]) => k !== targetLang);
+  // Show all 5 languages in both dropdowns — including the one currently
+  // selected in the other dropdown. On collision, the OTHER dropdown clears
+  // to a "Select language" placeholder so the user explicitly picks. This
+  // is the UX the user asked for: I should be able to set source=English
+  // even when target=English; the target then resets and waits for me.
+  const allLangOptions = Object.entries(LANGUAGES);
 
-  /**
-   * When the source language changes, if the new source equals the current
-   * target we'd silently fall into a same-language state — the browser shows
-   * the first remaining option in the target dropdown, but React's targetLang
-   * state still holds the colliding value until the user explicitly clicks.
-   * Result: the next "Translate" submits source==target and the backend 400s.
-   * Auto-pick a different target to keep state and UI in sync.
-   */
   const handleSourceChange = (newSource) => {
     setSourceLang(newSource);
     if (newSource === targetLang) {
-      const next = Object.keys(LANGUAGES).find(k => k !== newSource) || "en";
-      setTargetLang(next);
+      // Clear target so the user makes a deliberate choice instead of getting
+      // a silent en→en submission. The dropdown will show its placeholder.
+      setTargetLang("");
     }
   };
 
   const handleTargetChange = (newTarget) => {
     setTargetLang(newTarget);
     if (newTarget === sourceLang) {
-      const next = Object.keys(LANGUAGES).find(k => k !== newTarget) || "tr";
-      setSourceLang(next);
+      setSourceLang("");
     }
   };
+
+  // Translate button enabled only when both langs are picked and not equal.
+  const canTranslate = !!sourceLang && !!targetLang && sourceLang !== targetLang;
 
   return (
     // Outer wrapper handles vertical scroll inside the fixed-height <main>.
@@ -761,13 +758,15 @@ function TranslationPanel() {
       {/* ── Language pair ────────────────────────────────────────── */}
       <div style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "center" }}>
         <select value={sourceLang} onChange={e => handleSourceChange(e.target.value)}
-          style={{ padding: "6px 12px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, fontSize: 13 }}>
-          {langOptions.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          style={{ padding: "6px 12px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, fontSize: 13, minWidth: 140 }}>
+          <option value="" disabled>Select language…</option>
+          {allLangOptions.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
         <span style={{ fontSize: 18, color: "rgba(0,0,0,0.25)" }}>→</span>
         <select value={targetLang} onChange={e => handleTargetChange(e.target.value)}
-          style={{ padding: "6px 12px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, fontSize: 13 }}>
-          {Object.entries(LANGUAGES).filter(([k]) => k !== sourceLang).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          style={{ padding: "6px 12px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, fontSize: 13, minWidth: 140 }}>
+          <option value="" disabled>Select language…</option>
+          {allLangOptions.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
       </div>
 
@@ -776,22 +775,23 @@ function TranslationPanel() {
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
           <div>
             <label style={{ fontSize: 12, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 6, fontWeight: 500 }}>
-              Source ({LANGUAGES[sourceLang]})
+              Source ({sourceLang ? LANGUAGES[sourceLang] : "select language"})
             </label>
             <textarea value={sourceText} onChange={e => setSourceText(e.target.value)}
-              rows={10} placeholder={`Enter ${LANGUAGES[sourceLang]} text...`}
+              rows={10} placeholder={sourceLang ? `Enter ${LANGUAGES[sourceLang]} text...` : "Pick a source language above first."}
               style={{ width: "100%", padding: 12, border: "1px solid rgba(0,0,0,0.12)", borderRadius: 10, fontSize: 14, resize: "vertical", lineHeight: 1.6, fontFamily: "inherit", outline: "none", boxSizing: "border-box" }} />
-            <button onClick={translateText} disabled={loading || !sourceText.trim()}
+            <button onClick={translateText} disabled={loading || !sourceText.trim() || !canTranslate}
+              title={!canTranslate ? "Pick source and target languages first" : undefined}
               style={{
-                marginTop: 10, width: "100%", padding: "10px", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 500, cursor: "pointer",
-                background: sourceText.trim() ? "#0F6E56" : "rgba(0,0,0,0.08)", color: sourceText.trim() ? "#fff" : "rgba(0,0,0,0.3)",
+                marginTop: 10, width: "100%", padding: "10px", borderRadius: 8, border: "none", fontSize: 14, fontWeight: 500, cursor: (loading || !sourceText.trim() || !canTranslate) ? "default" : "pointer",
+                background: (sourceText.trim() && canTranslate) ? "#0F6E56" : "rgba(0,0,0,0.08)", color: (sourceText.trim() && canTranslate) ? "#fff" : "rgba(0,0,0,0.3)",
               }}>
               {loading ? "Translating…" : "Translate"}
             </button>
           </div>
           <div>
             <label style={{ fontSize: 12, color: "rgba(0,0,0,0.4)", display: "block", marginBottom: 6, fontWeight: 500 }}>
-              Translation ({LANGUAGES[targetLang]})
+              Translation ({targetLang ? LANGUAGES[targetLang] : "select language"})
             </label>
             {loading && <LoadingBar label="Translating with Gemini 2.5 Flash…" />}
             <textarea value={translatedText} readOnly rows={10}
@@ -801,7 +801,13 @@ function TranslationPanel() {
         </div>
       ) : (
         <div>
-          <FileUploadZone onFilesSelected={translateDocument} label={`Upload ${LANGUAGES[sourceLang]} PDF, TXT, or DOCX for translation`} />
+          {canTranslate ? (
+            <FileUploadZone onFilesSelected={translateDocument} label={`Upload ${LANGUAGES[sourceLang]} PDF, TXT, or DOCX for translation`} />
+          ) : (
+            <div style={{ padding: "2rem", border: "2px dashed rgba(0,0,0,0.12)", borderRadius: 12, textAlign: "center", color: "rgba(0,0,0,0.45)", fontSize: 14 }}>
+              Pick a source and target language above before uploading a document.
+            </div>
+          )}
           {loading && (
             <div style={{ marginTop: 16 }}>
               <LoadingBar label={`Translating "${loadingFile}" — this may take a moment for longer documents…`} />
@@ -2227,7 +2233,7 @@ export default function App() {
         textAlign: "center",
       }}>
         <span style={{ fontWeight: 600 }}>Public demo.</span>
-        <span>Data resets between sessions. For the full deployment with persistent storage, BGE-M3 retrieval, and SLA — <a href="https://hasancanbiyik.com" target="_blank" rel="noopener noreferrer" style={{ color: "#5C4500", textDecoration: "underline" }}>get in touch</a>.</span>
+        <span>Data resets between sessions. For the full deployment with persistent storage, BGE-M3 retrieval, and SLA — <a href="https://www.linkedin.com/in/hasancanbyk/" target="_blank" rel="noopener noreferrer" style={{ color: "#5C4500", textDecoration: "underline" }}>get in touch</a>.</span>
       </div>
 
       <header style={{
@@ -2243,7 +2249,7 @@ export default function App() {
               <path d="M3 21v-4a2 2 0 012-2h4a2 2 0 012 2v4M13 21v-4a2 2 0 012-2h4a2 2 0 012 2v4M3 10V6a2 2 0 012-2h14a2 2 0 012 2v4" />
             </svg>
           </div>
-          <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.02em" }}>Immigration Assistance ChatBot</span>
+          <span style={{ fontSize: 16, fontWeight: 600, letterSpacing: "-0.02em" }}>Immigration Assistant</span>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {health && (
@@ -2287,7 +2293,7 @@ export default function App() {
         padding: "8px 1.5rem", borderTop: "1px solid rgba(0,0,0,0.06)",
         fontSize: 11, color: "rgba(0,0,0,0.3)", textAlign: "center", background: "#fff",
       }}>
-        Immigration Assistance ChatBot v1.0 — For informational purposes only. Consult USCIS or an immigration attorney for official guidance.
+        Immigration Assistant v1.0 — For informational purposes only. Consult USCIS or an immigration attorney for official guidance.
       </footer>
     </div>
   );

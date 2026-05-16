@@ -1,4 +1,4 @@
-# Immigration Assistance ChatBot — Dependencies
+# Immigration Assistant — Dependencies
 # ===============================================
 
 # Core
@@ -22,6 +22,9 @@ sentencepiece>=0.2.0
 
 # LLM (Gemini Free Tier)
 google-generativeai>=0.8.0
+
+# PDF export for translations (Unicode-safe with DejaVu Sans from fonts-dejavu-core)
+fpdf2>=2.7.0
 
 # Testing
 pytest>=8.0.0

@@ -90,6 +90,9 @@ REQUIREMENTS:
 - Use formal, professional language appropriate for US immigration submissions
 - For ambiguous legal terms, choose the more conservative/formal translation
 - Do NOT add commentary, explanations, or notes inside the translation itself
+- Return PLAIN TEXT ONLY. Do NOT use any markdown formatting: no **bold**, no __underline__,
+  no *italic*, no _italic_, no `code`, no # headings, no bullet points with leading `*` or `-`.
+  The output will be rendered into .docx and .pdf files that do not interpret markdown.
 
 After the complete translation, on a new line write EXACTLY:
 CONFIDENCE: [0-100]
@@ -98,6 +101,33 @@ Where the confidence score reflects how accurately the legal/technical content w
 
 TEXT TO TRANSLATE:
 {text}"""
+
+
+def _strip_markdown(text: str) -> str:
+    """
+    Remove markdown formatting markers that Gemini sometimes adds despite the
+    prompt instructing plain text. The downstream .docx and .pdf builders treat
+    the response as plain text — without stripping, `**bold**` shows up
+    literally as `**bold**` in the rendered document.
+
+    Targets the lightweight markdown commonly emitted: bold/italic emphasis
+    pairs around words. Deliberately conservative: only strips matched pairs
+    so legitimate asterisks/underscores in the source (e.g. unfilled form
+    fields like `Name: _____`) are preserved.
+    """
+    import re
+    if not text:
+        return text
+    # **bold** and __bold__ — paired markers around non-newline content
+    text = re.sub(r"\*\*([^\n*]+?)\*\*", r"\1", text)
+    text = re.sub(r"__([^\n_]+?)__", r"\1", text)
+    # *italic* and _italic_ — same idea, single marker
+    # Use word boundaries so `5*3=15` or `value_with_underscores` aren't stripped.
+    text = re.sub(r"(?<!\w)\*([^\s*][^*\n]*?)\*(?!\w)", r"\1", text)
+    text = re.sub(r"(?<!\w)_([^\s_][^_\n]*?)_(?!\w)", r"\1", text)
+    # `inline code` — single backticks around content
+    text = re.sub(r"`([^`\n]+?)`", r"\1", text)
+    return text
 
 IMMIGRATION_QA_SYSTEM_PROMPT = """You are an immigration law research assistant built for law firms and paralegals. Your role is to answer questions about immigration cases based ONLY on the provided document excerpts.
 
@@ -324,6 +354,11 @@ class GeminiService:
             translation = "\n".join(translation_lines).strip()
             if not translation:
                 translation = raw  # fallback if parsing fails
+
+            # Defensive: strip any markdown formatting markers Gemini emitted
+            # despite the prompt asking for plain text. Without this, **bold**
+            # and *italic* show up literally in .docx / .pdf downloads.
+            translation = _strip_markdown(translation)
 
             return {
                 "translated_text": translation,

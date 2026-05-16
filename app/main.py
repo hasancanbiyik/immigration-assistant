@@ -1,5 +1,5 @@
 """
-Immigration Assistance ChatBot — Main FastAPI Application
+Immigration Assistant — Main FastAPI Application
 =========================================================
 A RAG-powered immigration law assistant with document Q&A,
 USCIS-compliant translation, and case timeline tracking.
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize services on startup, cleanup on shutdown."""
-    logger.info("🚀 Starting Immigration Assistance ChatBot...")
+    logger.info("🚀 Starting Immigration Assistant...")
 
     # Initialize RFE tracker SQLite database
     rfe_db.init_db()
@@ -64,7 +64,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Immigration Assistance ChatBot",
+    title="Immigration Assistant",
     description=(
         "RAG-powered immigration law assistant with document Q&A, "
         "USCIS-compliant translation, and case timeline tracking."
@@ -125,7 +125,7 @@ async def health_check():
     return {
         "status": "healthy",
         "ready": ready,
-        "service": "Immigration Assistance ChatBot",
+        "service": "Immigration Assistant",
         "version": "1.0.0",
         "modules": {
             "document_qa": "active" if embedder_loaded else "initializing",

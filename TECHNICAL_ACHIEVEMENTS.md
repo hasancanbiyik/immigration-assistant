@@ -1,4 +1,4 @@
-# Technical Achievements — Immigration Assistance ChatBot
+# Technical Achievements — Immigration Assistant
 
 > This document is intended for LLM-assisted resume generation and technical portfolio review.
 > It describes what was designed, built, and improved across the full development arc of this project.
@@ -7,7 +7,7 @@
 
 ## Project Overview
 
-**Immigration Assistance ChatBot** is a full-stack AI application designed to assist immigration attorneys with document analysis, legal translation, and case timeline management. The system is built to run entirely on-premise — all client data stays on the attorney's machine, which is a meaningful differentiator from cloud-based legal SaaS tools (Clio, Filevine, MyCase).
+**Immigration Assistant** is a full-stack AI application designed to assist immigration attorneys with document analysis, legal translation, and case timeline management. The system is built to run entirely on-premise — all client data stays on the attorney's machine, which is a meaningful differentiator from cloud-based legal SaaS tools (Clio, Filevine, MyCase).
 
 **Live stack:** FastAPI (Python) backend · React 19 + Vite frontend · ChromaDB vector database · BGE-M3 / MiniLM embeddings · Gemini 2.5 Flash LLM · Helsinki-NLP OPUS-MT translation models · PyMuPDF document parsing · Docker
 

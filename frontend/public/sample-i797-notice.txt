@@ -68,5 +68,5 @@ THIS NOTICE DOES NOT GRANT ANY IMMIGRATION STATUS OR BENEFIT.
 — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — —
 NOTE: This is a SYNTHETIC sample document created for demonstration purposes only. All names,
 addresses, receipt numbers, and case details are fictional. No real applicant data is contained
-in this notice. Created for the Immigration Assistance ChatBot demo deployment.
+in this notice. Created for the Immigration Assistant demo deployment.
 — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — — —

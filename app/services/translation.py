@@ -48,7 +48,7 @@ LANGUAGE_NAMES = {
 # USCIS certification template per 8 CFR 103.2(b)(3)
 USCIS_CERTIFICATION_TEMPLATE = """CERTIFICATION OF TRANSLATION
 
-I, Immigration Assistance ChatBot (AI-Assisted Translation Tool), hereby certify that:
+I, Immigration Assistant (AI-Assisted Translation Tool), hereby certify that:
 
 1. The attached translation from {source_language} to {target_language} is complete and accurate to the best of my ability.
 

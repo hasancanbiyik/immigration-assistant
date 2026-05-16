@@ -1,5 +1,5 @@
 """
-Shared test fixtures for the Immigration Assistance ChatBot test suite.
+Shared test fixtures for the Immigration Assistant test suite.
 
 Strategy
 --------
