@@ -8,12 +8,9 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
-dist-ssr
-# Backup build dirs left behind when Vite can't empty its outDir (sandbox
-# filesystem permissions etc). The trailing glob covers dist.old.<random>.
-dist.old
-dist.old*
+# Catch all build/verify output directories: dist, dist-ssr, dist.old,
+# dist.old.<random>, dist-verify, etc. Trailing glob is intentional.
+dist*
 *.local
 
 # Editor directories and files

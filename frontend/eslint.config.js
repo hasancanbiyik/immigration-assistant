@@ -5,10 +5,10 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  // Ignore all build output directories. The `dist.old*` glob catches any
-  // backup folders left behind when a build couldn't empty its own outDir
-  // (this has bitten us in CI before).
-  globalIgnores(['dist', 'dist-ssr', 'dist.old*', 'node_modules', 'public']),
+  // Ignore all build output directories. The `dist*` glob catches every
+  // variant — dist, dist-ssr, dist.old, dist.old.<random>, dist-verify, etc.
+  // — so we never re-burn an hour debugging "ESLint hates my minified bundle".
+  globalIgnores(['dist*', 'node_modules', 'public']),
   {
     files: ['**/*.{js,jsx}'],
     extends: [

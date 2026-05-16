@@ -684,7 +684,34 @@ function TranslationPanel() {
     setLoading(false);
   };
 
-  const langOptions = Object.entries(LANGUAGES).filter(([k]) => k !== (mode === "text" ? targetLang : ""));
+  // Filter source dropdown to exclude the current target. (Previous version
+  // only filtered in text mode — document mode let source==target, which the
+  // backend rejects with HTTP 400 "Source and target must be different".)
+  const langOptions = Object.entries(LANGUAGES).filter(([k]) => k !== targetLang);
+
+  /**
+   * When the source language changes, if the new source equals the current
+   * target we'd silently fall into a same-language state — the browser shows
+   * the first remaining option in the target dropdown, but React's targetLang
+   * state still holds the colliding value until the user explicitly clicks.
+   * Result: the next "Translate" submits source==target and the backend 400s.
+   * Auto-pick a different target to keep state and UI in sync.
+   */
+  const handleSourceChange = (newSource) => {
+    setSourceLang(newSource);
+    if (newSource === targetLang) {
+      const next = Object.keys(LANGUAGES).find(k => k !== newSource) || "en";
+      setTargetLang(next);
+    }
+  };
+
+  const handleTargetChange = (newTarget) => {
+    setTargetLang(newTarget);
+    if (newTarget === sourceLang) {
+      const next = Object.keys(LANGUAGES).find(k => k !== newTarget) || "tr";
+      setSourceLang(next);
+    }
+  };
 
   return (
     // Outer wrapper handles vertical scroll inside the fixed-height <main>.
@@ -733,12 +760,12 @@ function TranslationPanel() {
 
       {/* ── Language pair ────────────────────────────────────────── */}
       <div style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "center" }}>
-        <select value={sourceLang} onChange={e => setSourceLang(e.target.value)}
+        <select value={sourceLang} onChange={e => handleSourceChange(e.target.value)}
           style={{ padding: "6px 12px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, fontSize: 13 }}>
           {langOptions.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
         <span style={{ fontSize: 18, color: "rgba(0,0,0,0.25)" }}>→</span>
-        <select value={targetLang} onChange={e => setTargetLang(e.target.value)}
+        <select value={targetLang} onChange={e => handleTargetChange(e.target.value)}
           style={{ padding: "6px 12px", border: "1px solid rgba(0,0,0,0.15)", borderRadius: 8, fontSize: 13 }}>
           {Object.entries(LANGUAGES).filter(([k]) => k !== sourceLang).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
         </select>
