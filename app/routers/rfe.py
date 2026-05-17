@@ -3,7 +3,7 @@ RFE Tracker Router
 ==================
 CRUD endpoints for RFE cases and per-case issue checklists.
 
-All data is stored in SQLite (./data/rfe_tracker.db).
+All data is stored in SQLite (./data/app.db, shared with timeline_events).
 Issues are always fetched through their parent case_id,
 so there is no way checklist items can bleed across cases or clients.
 

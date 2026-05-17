@@ -124,7 +124,7 @@ Wrote 62 tests across 6 test modules:
 
 Key testing decisions:
 - **No ML models in CI** — mocked at the class level so the FastAPI lifespan runs for real but services return deterministic outputs
-- **Timeline state isolation** — the module-level `_timelines` dict is cleared before each test via an `autouse` fixture to prevent inter-test state bleed
+- **SQLite state isolation** — the `timeline_events`, `rfe_cases`, and `rfe_issues` tables are wiped via an `autouse` fixture pointed at a temp SQLite file (set via `APP_DB_PATH` before any app import) so tests never write to the real `./data/` directory and one test's rows can't bleed into the next
 - **Real document parsing in router tests** — PyMuPDF and python-docx run for real; only the embedding/LLM layer is mocked. This catches regressions in the parsing pipeline.
 
 ---

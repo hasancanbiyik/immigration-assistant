@@ -23,7 +23,7 @@ import os
 from app.services.vector_store import VectorStoreService
 from app.services.translation import TranslationService
 from app.services.gemini import GeminiService
-from app.services import rfe_db
+from app.services import rfe_db, timeline_db
 from app.routers import documents, translation, timeline
 from app.routers import rfe
 
@@ -36,9 +36,12 @@ async def lifespan(app: FastAPI):
     """Initialize services on startup, cleanup on shutdown."""
     logger.info("🚀 Starting Immigration Assistant...")
 
-    # Initialize RFE tracker SQLite database
+    # Initialize SQLite tables. Both rfe_db and timeline_db share the same
+    # database file (./data/app.db by default) so a future Tier 2 migration
+    # can introduce a `clients` table that both will FK to.
     rfe_db.init_db()
-    logger.info("✅ RFE tracker database ready (SQLite)")
+    timeline_db.init_db()
+    logger.info("✅ SQLite tables ready (RFE cases + timeline events)")
 
     # Initialize vector store
     app.state.vector_store = VectorStoreService()

@@ -22,6 +22,7 @@ from app.models.schemas import (
     TimelineEventType,
     CaseType,
 )
+from app.services import timeline_db
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -260,8 +261,13 @@ def _extract_events(text: str, source_filename: str) -> list[TimelineEvent]:
     return events
 
 
-# ─── In-memory timeline storage (per session) ────────────────────────
-_timelines: dict[str, list[TimelineEvent]] = {}
+# ─── Manual events (SQLite-backed, see app/services/timeline_db.py) ──────
+#
+# Previously stored in an in-memory `_timelines` dict that didn't survive
+# container restarts. Migrated to SQLite in Tier 1 of the persistence
+# consolidation. Tier 2 (planned) will FK the rows to a shared `clients`
+# table so the same client can be referenced from Doc Q&A, Timeline, and
+# RFE Tracker.
 
 
 class ManualEventRequest(BaseModel):
@@ -274,46 +280,36 @@ class ManualEventRequest(BaseModel):
     form_type: Optional[str] = None
 
 
+def _build_timeline_response(client_name: str) -> CaseTimeline:
+    """Fetch all events for a client from SQLite and wrap in the response schema."""
+    rows = timeline_db.get_events_for_client(client_name)
+    events = [TimelineEvent(**row) for row in rows]
+    return CaseTimeline(
+        client_name=client_name,
+        events=events,
+        extracted_from=["manual_entry"] if events else [],
+    )
+
+
 @router.post("/events/add", response_model=CaseTimeline)
 async def add_manual_event(body: ManualEventRequest):
     """
     Manually add a timeline event for a client.
-    Useful for building case histories without USCIS documents.
+    Persisted in SQLite so it survives container restarts (where the
+    storage is persistent — free HF tier still wipes on every rebuild).
     """
-    event = TimelineEvent(
-        event_type=body.event_type,
-        date=body.date,
+    timeline_db.add_event(
+        client_name=body.client_name,
+        event_type=body.event_type.value,
         description=body.description,
+        date=body.date,
         receipt_number=body.receipt_number,
         form_type=body.form_type,
-        source_document="manual_entry",
     )
-
-    key = body.client_name.lower().strip()
-    if key not in _timelines:
-        _timelines[key] = []
-    _timelines[key].append(event)
-
-    # Sort by date
-    sorted_events = sorted(
-        _timelines[key], key=lambda e: e.date or "9999-99-99"
-    )
-
-    return CaseTimeline(
-        client_name=body.client_name,
-        events=sorted_events,
-        extracted_from=["manual_entry"],
-    )
+    return _build_timeline_response(body.client_name)
 
 
 @router.get("/events/{client_name}", response_model=CaseTimeline)
 async def get_client_timeline(client_name: str):
-    """Get the timeline for a specific client."""
-    key = client_name.lower().strip()
-    events = _timelines.get(key, [])
-
-    return CaseTimeline(
-        client_name=client_name,
-        events=sorted(events, key=lambda e: e.date or "9999-99-99"),
-        extracted_from=["manual_entry"] if events else [],
-    )
+    """Get the saved timeline for a specific client (manual events only)."""
+    return _build_timeline_response(client_name)

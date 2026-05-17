@@ -1,8 +1,10 @@
 """
 Integration tests for the Case Timeline router.
 
-The timeline uses in-memory storage (_timelines dict) so no database
-mocking is required. conftest.py clears the dict between tests automatically.
+Timeline events are persisted in SQLite (shared file with the RFE tracker —
+see app/services/timeline_db.py). Tests run against a temp SQLite file
+configured in conftest.py; the autouse `clear_sqlite_state` fixture wipes
+the table between tests so events from one test don't bleed into the next.
 """
 
 import io

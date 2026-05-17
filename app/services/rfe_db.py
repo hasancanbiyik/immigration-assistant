@@ -3,10 +3,12 @@ RFE Tracker — SQLite Persistence Layer
 =======================================
 Manages RFE cases and per-case issue checklists.
 
-Storage: ./data/rfe_tracker.db (single file, zero infrastructure)
-Tables:
+Storage: ./data/app.db (shared with timeline_db; single file, zero infrastructure)
+Tables managed here:
   - rfe_cases   : one row per RFE case (client, deadline, status, etc.)
   - rfe_issues  : checklist items scoped to a case via case_id FK
+Tables managed elsewhere in the same DB:
+  - timeline_events  (see app/services/timeline_db.py)
 
 Design notes:
   - Issues are always fetched via case_id — they can never leak across cases.
@@ -23,7 +25,19 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = os.getenv("RFE_DB_PATH", "./data/rfe_tracker.db")
+# Shared SQLite file — also hosts timeline_events (see app/services/timeline_db.py).
+# `APP_DB_PATH` is the preferred env var; `RFE_DB_PATH` is honored as a fallback
+# for any deployment set up before the timeline/RFE consolidation.
+#
+# Tier 2 (planned): introduce a `clients` table here that both `rfe_cases` and
+# `timeline_events` will FK to via `client_id`. That removes the current
+# architectural smell of three independent client identity systems (Doc Q&A's
+# localStorage, Timeline's lowercased key, RFE's free-text column).
+DB_PATH = (
+    os.getenv("APP_DB_PATH")
+    or os.getenv("RFE_DB_PATH")
+    or "./data/app.db"
+)
 RFE_DEFAULT_RESPONSE_DAYS = 87  # Standard USCIS RFE response window
 
 

@@ -25,10 +25,20 @@ module-load time (i.e. before any test or fixture runs), which is early
 enough to intercept the import chain.
 """
 
+import os
 import sys
+import tempfile
 from unittest.mock import MagicMock, AsyncMock, patch
 import pytest
 from fastapi.testclient import TestClient
+
+
+# ── Test SQLite path (must be set BEFORE any app.* import) ────────────────────
+# Both rfe_db and timeline_db read APP_DB_PATH at module-load time. Point them
+# at a throwaway temp file so tests don't write to ./data/ in the repo root.
+_TEST_DB_FD, _TEST_DB_PATH = tempfile.mkstemp(prefix="immigration_test_", suffix=".db")
+os.close(_TEST_DB_FD)
+os.environ["APP_DB_PATH"] = _TEST_DB_PATH
 
 
 # ── Stub heavy ML deps so app.main can be imported without the full ML stack ──
@@ -130,7 +140,8 @@ def client():
     FastAPI TestClient with all ML services mocked.
 
     Each test gets a fresh lifespan cycle (startup + shutdown) so app.state
-    is clean. The in-memory timeline dict is also reset via clear_timelines.
+    is clean. SQLite tables (timeline_events, rfe_cases, rfe_issues) are
+    wiped between tests by the autouse `clear_sqlite_state` fixture.
     """
     with (
         patch("app.main.VectorStoreService", return_value=make_mock_vector_store()),
@@ -142,18 +153,30 @@ def client():
             yield c
 
 
-# ─── Timeline state cleanup ───────────────────────────────────────────────────
+# ─── SQLite state cleanup ─────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def clear_timelines():
+def clear_sqlite_state():
     """
-    Reset the module-level _timelines dict before each test.
+    Wipe SQLite tables before and after each test so events/cases from one
+    test don't bleed into the next.
 
-    The timeline router stores events in a plain Python dict for the duration
-    of the server process. Between tests we must wipe it, otherwise events
-    created in one test bleed into the next.
+    Calls init_db() on each module first because the fixture may run before
+    any test invokes the `client` fixture (which triggers the lifespan that
+    normally creates the tables).
     """
-    import app.routers.timeline as tl_module
-    tl_module._timelines.clear()
+    from app.services import timeline_db, rfe_db
+    timeline_db.init_db()
+    rfe_db.init_db()
+
+    def _wipe():
+        # Order matters: rfe_issues FK-cascades from rfe_cases, but explicit
+        # is clearer than implicit (and faster than relying on cascade).
+        timeline_db.clear_all_events()
+        with rfe_db._get_conn() as conn:
+            conn.execute("DELETE FROM rfe_issues")
+            conn.execute("DELETE FROM rfe_cases")
+
+    _wipe()
     yield
-    tl_module._timelines.clear()
+    _wipe()
